@@ -17,6 +17,9 @@ import json, sys, requests, time, urllib.parse
 
 ## ** variables **
 
+VERSION='20190610'
+
+
 ## file to save last state
 STATEFILE='./warntg.state'
 
@@ -50,6 +53,26 @@ TG_WA_URL='https://wachalarm.ralsu.de/webalarm_bot/webalarm_bot.php?json={"comma
 
 ## list of WebALARM_BOT-Keys to send telegram-message
 tg_wa_api=['*your*webalarmkey*']
+
+
+## url to send DAPNET-message
+DN_URL='http://www.hampager.de:8080/calls'
+
+
+## auth to send DAPNET-message
+dn_auth=('*your*call*','*your*dapnetkey*')
+
+
+## replace chars in DAPNET-message
+dn_replace={'Ä':'a', 'ä':'A', 'Ö':'o', 'ö':'O', 'Ü':'u', 'ü':'U', 'ß':'S'}
+
+
+## list of DAPNET-callsigns to send messages
+dn_callsigns=['*you*call*','*your*friendcall*']
+
+
+## list of DAPNET-TX-groups
+dn_txgrp = ['dl-ni']
 
 
 ## dict with DMRIds and list of tuples which TGs will be removed on warning and restored after
@@ -124,6 +147,7 @@ def switch_bm_tgs(warn=False,state=True):
 		bm_static = bm_state['staticSubscriptions']
 		bm_current_tgs = {0:[],1:[],2:[]}
 		temp_log = 'DMRId: %s   '%dmrid
+		dn_log = 'DMRId:%s '%dmrid
 
 		for static_tg in bm_static:
 			bm_current_tgs[static_tg['slot']].append(static_tg['talkgroup'])
@@ -133,6 +157,7 @@ def switch_bm_tgs(warn=False,state=True):
 				if warn:
 					print('>> TG',tg,'aus slot',slot,'entfernt')
 					temp_log += 'TS %i TG %i : dynamisch  '%(slot,tg)
+					dn_log += 'TS%i,TG%i:dyn '%(slot,tg)
 					set_bm_tg(dmrid,tg,slot,False)
 				else:
 					print('>> TG',tg,'in slot',slot,'bereits gebucht')
@@ -142,11 +167,14 @@ def switch_bm_tgs(warn=False,state=True):
 				else:
 					print('>> TG',tg,'in slot',slot,'hinzugefügt')
 					temp_log += 'TS %i TG %i : statisch  '%(slot,tg)
+					dn_log += 'TS%i,TG%i:stat '%(slot,tg)
 					set_bm_tg(dmrid,tg,slot,True)
 		if warn and state != warn:
-			send_tg_msg(temp_log,dmrid,'Unwetter-Modus EIN')
+			send_tg_msg(temp_log,dmrid,event)
+			send_dn_msg(event+' '+dn_log,dn_callsigns)
 		elif not warn and state != warn:
 			send_tg_msg(temp_log,dmrid,'Unwetter-Modus AUS')
+			send_dn_msg('NORMALBETRIEB '+dn_log,dn_callsigns)
 
 
 def send_tg_msg(msg,grp = '',titel = ''):
@@ -175,6 +203,23 @@ def set_bm_tg(dmrid,tg,slot,settg):
 	bm_data = {'talkgroup': str(tg), 'timeslot': str(slot)}
 	bm_header = {'User-Agent': USER_AGENT}
 	bm_response = requests.post(bm_url, data=bm_data, auth=bm_auth, headers=bm_header)
+
+	
+def replace_multi(string,repl_dict):
+	for key in repl_dict:
+		string = string.replace(key,repl_dict[key])
+	return string
+
+
+def send_dn_msg(msg,callsigns):
+	dn_header = {'user-agent': USER_AGENT, 'content-type': 'application/json'}
+	dn_msg = SERVICE+': '+replace_multi(msg,dn_replace)
+
+	for callsign in callsigns:
+		if (len(dn_msg) > 80):
+			dn_msg = dn_msg[:77]+'...'
+		dn_data = {'text': dn_msg, 'callSignNames': [callsign], 'transmitterGroupNames': dn_txgrp}
+		dn_response = requests.post(DN_URL, data=json.dumps(dn_data), auth=dn_auth, headers=dn_header)
 
 
 ## ** main thread **
@@ -206,6 +251,7 @@ if __name__ == "__main__":
 		warnungen = warnlage['warnings']
 
 	warnung_aktiv = False
+	warnung_event = ''
 
 	for warncell in warnungen:
 		if warncell in warncellids or '*' in warncellids:
@@ -225,15 +271,18 @@ if __name__ == "__main__":
 						else:
 							print(' > ','gültig bis: ',time.ctime(warnung['end']/1000))
 						warnung_aktiv = True
+						warnung_event = warnung['event']
+						break						
 
 	try:
 		warnung_aktiv = bool(int(sys.argv[1]))
 		print('override warnung',warnung_aktiv)
+		warnung_event = 'TESTMODUS'
 	except:
 		pass
 
 	if warnung_aktiv:
-		print('\n','>>> WARNLAGE <<<','\n')
+		print('\n','>>> WARNLAGE: %s <<<'%(warnung_event),'\n')
 	else:
 		print('\n','* NORMALBETRIEB *','\n')
 
